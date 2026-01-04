@@ -83,9 +83,10 @@ class MSA:
                 new_processed.append(char)
                 new_mask.append(mask_char)
             else:
-                # Non-standard character: convert to X and mark as aligned
+                # Non-standard character: convert to X and mark as unaligned
+                # since that position will be converted to a gap in the aligned sequence
                 new_processed.append("X")
-                new_mask.append("1")
+                new_mask.append("0")
         
         return "".join(new_processed), "".join(new_mask)
     
@@ -137,7 +138,7 @@ class MSA:
             self._depth = len(self.sequences)
             # These will be set by the caller if needed
             self.full_length_sequences = None
-            self.alignment_masks = {}
+            self.alignment_masks = []
             # Check if protein sequences
             self.is_protein = is_protein
             return
@@ -157,7 +158,7 @@ class MSA:
             # Process to aligned format (strip lowercase, keep gaps)
             aligned_sequences = []
             full_length_sequences = []
-            alignment_masks = {}
+            alignment_masks = []
             
             for header, raw_seq in zip(self.headers, raw_sequences):
                 # Process for aligned format
@@ -167,7 +168,7 @@ class MSA:
                 # Process for unaligned format (full-length sequences)
                 full_seq, mask = self._process_sequence_for_unaligned(raw_seq, standard_letters)
                 full_length_sequences.append(full_seq)
-                alignment_masks[header] = mask
+                alignment_masks.append(mask)
             
             # Validate that aligned sequences have same length
             aligned_lengths = [len(seq) for seq in aligned_sequences]
@@ -193,7 +194,7 @@ class MSA:
             self.sequences = self._alphabetize_sequences(raw_sequences, standard_letters)
             self._seqlen = lengths[0]
             self.full_length_sequences = None
-            self.alignment_masks = {}
+            self.alignment_masks = []
         
         self._depth = len(self.sequences)
 
@@ -216,11 +217,9 @@ class MSA:
                     self.full_length_sequences[idx] for idx in indices
                 ]
             if self.alignment_masks:
-                result.alignment_masks = {
-                    self.headers[idx]: self.alignment_masks[self.headers[idx]]
-                    for idx in indices
-                    if self.headers[idx] in self.alignment_masks
-                }
+                result.alignment_masks = [
+                    self.alignment_masks[idx] for idx in indices
+                ]
             return result
         else:
             data = [
@@ -235,7 +234,7 @@ class MSA:
             # For position selection, full_length_sequences and masks need to be updated
             # For now, clear them as they may not be valid after position selection
             result.full_length_sequences = None
-            result.alignment_masks = {}
+            result.alignment_masks = []
             return result
 
     def swap(self, index1: int, index2: int) -> "MSA":
@@ -255,8 +254,40 @@ class MSA:
             full_length = copy(self.full_length_sequences)
             full_length[index1], full_length[index2] = full_length[index2], full_length[index1]
             result.full_length_sequences = full_length
-        result.alignment_masks = self.alignment_masks.copy()
+        if self.alignment_masks:
+            masks = copy(self.alignment_masks)
+            masks[index1], masks[index2] = masks[index2], masks[index1]
+            result.alignment_masks = masks
+        else:
+            result.alignment_masks = []
         return result
+
+    def process_headers(self, header_func: callable) -> "MSA":
+        """Apply a function to all headers and update headers in place.
+        
+        Args:
+            header_func: Function that takes a header string and returns a new header string
+        
+        Returns:
+            Self (for method chaining)
+        """
+        self.headers = [header_func(header) for header in self.headers]
+        return self
+
+    def set_query_seq_header(self, query_header: str = "query") -> "MSA":
+        """Set the header of the first sequence (query sequence) in the MSA.
+        
+        Args:
+            query_header: Header to set for the first sequence (default: "query")
+        
+        Returns:
+            Self (for method chaining)
+        """
+        if not self.headers:
+            raise ValueError("MSA has no sequences")
+        
+        self.headers[0] = query_header
+        return self
 
     def filter_coverage(self, threshold: float, axis: str = "seqs") -> "MSA":
         assert 0 <= threshold <= 1
@@ -718,8 +749,8 @@ class MSA:
         
         # Write masks in same format as MSA
         mask_sequences = [
-            (header, self.alignment_masks.get(header, ""))
-            for header in self.headers
+            (header, mask)
+            for header, mask in zip(self.headers, self.alignment_masks)
         ]
         mask_msa = MSA(
             mask_sequences,

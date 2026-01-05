@@ -35,7 +35,12 @@ class MSA:
         """Helper: Process single sequence for aligned format (remove lowercase, keep gaps, alphabetize)."""
         # Remove lowercase letters (insertions)
         processed = "".join(char for char in sequence if not char.islower())
-        
+
+        # Replace ambiguous amino acids
+        processed = processed.replace("J", "I")  # J -> I
+        processed = processed.replace("B", "D")  # B -> D
+        processed = processed.replace("Z", "Q")  # Z -> Q    
+
         # Alphabetize: convert non-standard letters to gaps
         allowed_chars = standard_letters + MSA.gap_character
         allowed_set = set(allowed_chars)
@@ -73,7 +78,12 @@ class MSA:
         
         processed = "".join(processed_chars)
         mask = "".join(mask_chars)
-        
+
+        # Replace ambiguous amino acids
+        processed = processed.replace("J", "I")  # J -> I
+        processed = processed.replace("B", "D")  # B -> D
+        processed = processed.replace("Z", "Q")  # Z -> Q   
+
         # Alphabetize: convert non-standard letters to X
         allowed_set = set(standard_letters)
         new_processed = []

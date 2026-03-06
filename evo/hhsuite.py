@@ -575,6 +575,32 @@ def search_hhblits(
         raise ValueError(f"Unknown strategy: {strategy!r}. Use 'uniref100' or 'iterative'.")
 
 
+def _search_single_protein(args: tuple) -> tuple[str, Path | None]:
+    """Worker function for parallel batch search. Must be top-level for pickling."""
+    seq_id, sequence, database, output_dir, strategy, n_cpus, kwargs = args
+    output_dir = Path(output_dir)
+
+    query_file = output_dir / f"{seq_id}.fasta"
+    query_file.write_text(f">{seq_id}\n{sequence}\n")
+
+    try:
+        output_path = search_hhblits(
+            query_file,
+            database,
+            output_dir,
+            strategy=strategy,
+            n_cpus=n_cpus,
+            **kwargs,
+        )
+        return seq_id, output_path
+    except subprocess.CalledProcessError as e:
+        logger.error(f"hhblits failed for {seq_id}: {e}")
+        return seq_id, None
+    finally:
+        if query_file.exists():
+            query_file.unlink()
+
+
 def search_hhblits_batch(
     query_fasta: str | Path,
     database: str | Path,
@@ -584,6 +610,7 @@ def search_hhblits_batch(
     skip_existing: bool = True,
     strategy: str = "uniref100",
     n_cpus: int = 32,
+    n_workers: int = 1,
     **kwargs,
 ) -> dict[str, Path]:
     """Run hhblits for multiple query sequences from a multi-sequence FASTA.
@@ -597,8 +624,11 @@ def search_hhblits_batch(
         protein_ids: If provided, only process these protein IDs.
             Useful for running only missing proteins.
         skip_existing: Skip proteins with existing .a3m output files.
-        strategy: Search strategy ("uniref100" or "iterative").
+        strategy: Search strategy - "uniref100" (default) or "iterative".
         n_cpus: Number of CPUs for each hhblits run.
+        n_workers: Number of parallel worker processes. Each worker runs one
+            hhblits search at a time using n_cpus threads. For a machine with
+            T total CPUs, set n_workers × n_cpus ≈ T.
         **kwargs: Additional arguments passed to search_hhblits().
 
     Returns:
@@ -636,32 +666,56 @@ def search_hhblits_batch(
         if skipped > 0:
             logger.info(f"Skipping {skipped} proteins with existing .a3m files")
 
-    logger.info(f"Running hhblits for {len(sequences)} proteins")
+    logger.info(
+        f"Running hhblits for {len(sequences)} proteins "
+        f"({n_workers} workers × {n_cpus} CPUs each)"
+    )
 
-    results: dict[str, Path] = {}
-    for i, (seq_id, sequence) in enumerate(sequences.items()):
-        logger.info(f"[{i + 1}/{len(sequences)}] Processing {seq_id}")
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        tqdm = None
 
-        # Write individual query FASTA
-        query_file = output_dir / f"{seq_id}.fasta"
-        query_file.write_text(f">{seq_id}\n{sequence}\n")
-
-        try:
-            output_path = search_hhblits(
-                query_file,
-                database,
-                output_dir,
-                strategy=strategy,
-                n_cpus=n_cpus,
-                **kwargs,
+    if n_workers <= 1:
+        # Sequential execution
+        results: dict[str, Path] = {}
+        items = list(sequences.items())
+        iterator = enumerate(items)
+        if tqdm is not None:
+            pbar = tqdm(total=len(items), desc="hhblits", unit="protein")
+        else:
+            pbar = None
+        for i, (seq_id, sequence) in iterator:
+            if pbar is None:
+                logger.info(f"[{i + 1}/{len(items)}] Processing {seq_id}")
+            seq_id, output_path = _search_single_protein(
+                (seq_id, sequence, str(database), str(output_dir), strategy, n_cpus, kwargs)
             )
-            results[seq_id] = output_path
-        except subprocess.CalledProcessError as e:
-            logger.error(f"hhblits failed for {seq_id}: {e}")
-        finally:
-            # Clean up temporary query file
-            if query_file.exists():
-                query_file.unlink()
+            if output_path is not None:
+                results[seq_id] = output_path
+            if pbar is not None:
+                pbar.update(1)
+        if pbar is not None:
+            pbar.close()
+    else:
+        # Parallel execution
+        from multiprocessing import Pool
+
+        work_items = [
+            (seq_id, seq, str(database), str(output_dir), strategy, n_cpus, kwargs)
+            for seq_id, seq in sequences.items()
+        ]
+
+        results = {}
+        with Pool(processes=n_workers) as pool:
+            iterator = pool.imap_unordered(_search_single_protein, work_items)
+            if tqdm is not None:
+                iterator = tqdm(
+                    iterator, total=len(work_items), desc="hhblits", unit="protein"
+                )
+            for seq_id, output_path in iterator:
+                if output_path is not None:
+                    results[seq_id] = output_path
 
     logger.info(
         f"Completed: {len(results)}/{len(sequences)} successful "

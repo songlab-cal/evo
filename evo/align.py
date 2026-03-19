@@ -1,6 +1,7 @@
 from typing import List, Tuple, Union, Iterator, Sequence, TextIO, Dict, Optional
 from copy import copy
 import contextlib
+import gzip
 import math
 import tempfile
 import re
@@ -588,32 +589,38 @@ class MSA:
         **kwargs,
     ) -> "MSA":
         """Load MSA from file (supports both .fasta and .txt formats).
-        
+
+        Transparently handles gzip-compressed files (.gz suffix).
+
         Args:
-            alnfile: Path to MSA file
+            alnfile: Path to MSA file (may end in .gz for compressed files)
             format: Explicit format ("fasta" or "txt"), auto-detect if None
             keep_insertions: Whether to keep insertion characters. If includes_insertion_relative_to_query=True,
                 this will be automatically set to True to preserve original sequences.
-            includes_insertion_relative_to_query: If True, lowercase letters are treated as 
+            includes_insertion_relative_to_query: If True, lowercase letters are treated as
                 insertions relative to query. When True, automatically sets keep_insertions=True,
                 remove_lowercase_cols=False, and uppercase=False to preserve original sequences.
-        
+
         Returns:
             MSA object
         """
         filename = Path(alnfile)
-        
+
+        # Strip .gz to detect the real format
+        compressed = filename.suffix == ".gz"
+        stem_path = Path(filename.stem) if compressed else filename
+
         # Auto-detect format if not specified
         if format is None:
-            if filename.suffix == ".sto":
+            if stem_path.suffix == ".sto":
                 format = "stockholm"
-            elif filename.suffix in (".fas", ".fasta", ".a3m", ".a2m"):
+            elif stem_path.suffix in (".fas", ".fasta", ".a3m", ".a2m"):
                 format = "fasta"
-            elif filename.suffix == ".txt":
+            elif stem_path.suffix == ".txt":
                 format = "txt"
             else:
-                raise ValueError(f"Unknown file format {filename.suffix}")
-        
+                raise ValueError(f"Unknown file format {stem_path.suffix}")
+
         # When includes_insertion_relative_to_query=True, preserve original sequences
         if includes_insertion_relative_to_query:
             keep_insertions = True
@@ -623,34 +630,29 @@ class MSA:
             # Allow these to be passed via kwargs if needed
             remove_lowercase_cols = kwargs.get("remove_lowercase_cols", False)
             uppercase = kwargs.get("uppercase", False)
-        
-        if format == "stockholm":
-            return cls.from_stockholm(
-                filename,
-                keep_insertions,
-                includes_insertion_relative_to_query=includes_insertion_relative_to_query,
-                **kwargs,
-            )
-        elif format == "fasta":
-            return cls.from_fasta(
-                filename,
-                keep_insertions=keep_insertions,
-                uppercase=uppercase,
-                remove_lowercase_cols=remove_lowercase_cols,
-                includes_insertion_relative_to_query=includes_insertion_relative_to_query,
-                **kwargs,
-            )
-        elif format == "txt":
-            return cls.from_fasta(
-                filename,
-                keep_insertions=keep_insertions,
-                uppercase=uppercase,
-                remove_lowercase_cols=remove_lowercase_cols,
-                includes_insertion_relative_to_query=includes_insertion_relative_to_query,
-                **kwargs,
-            )  # TXT uses same format as FASTA
-        else:
-            raise ValueError(f"Unknown format: {format}")
+
+        # Open file handle (gzip or plain)
+        opener = gzip.open(filename, "rt") if compressed else contextlib.nullcontext(filename)
+
+        with opener as fh:
+            if format == "stockholm":
+                return cls.from_stockholm(
+                    fh,
+                    keep_insertions,
+                    includes_insertion_relative_to_query=includes_insertion_relative_to_query,
+                    **kwargs,
+                )
+            elif format in ("fasta", "txt"):
+                return cls.from_fasta(
+                    fh,
+                    keep_insertions=keep_insertions,
+                    uppercase=uppercase,
+                    remove_lowercase_cols=remove_lowercase_cols,
+                    includes_insertion_relative_to_query=includes_insertion_relative_to_query,
+                    **kwargs,
+                )
+            else:
+                raise ValueError(f"Unknown format: {format}")
 
     @classmethod
     def from_sequences(
@@ -665,98 +667,108 @@ class MSA:
             **kwargs,
         )
 
-    def write(self, outfile: PathLike, format: Optional[str] = None) -> None:
+    def write(self, outfile: PathLike, format: Optional[str] = None, compress: bool = False) -> None:
         """Write MSA to file (supports both formats).
-        
+
         Args:
-            outfile: Path to output file
+            outfile: Path to output file. If path ends in .gz, compression is
+                enabled automatically regardless of the *compress* flag.
             format: Explicit format, auto-detect from extension if None
+            compress: If True, gzip-compress the output and append .gz to the
+                path (unless it already ends in .gz).
         """
         filename = Path(outfile)
-        
-        # Auto-detect format if not specified
+
+        # Normalise compression flag / path
+        if filename.suffix == ".gz":
+            compress = True
+        elif compress:
+            filename = Path(str(filename) + ".gz")
+
+        # Detect format from the real (non-.gz) suffix
+        stem_path = Path(filename.stem) if compress else filename
         if format is None:
-            if filename.suffix == ".sto":
+            if stem_path.suffix == ".sto":
                 format = "stockholm"
-            elif filename.suffix in (".fas", ".fasta", ".a3m", ".a2m"):
+            elif stem_path.suffix in (".fas", ".fasta", ".a3m", ".a2m"):
                 format = "fasta"
-            elif filename.suffix == ".txt":
+            elif stem_path.suffix == ".txt":
                 format = "fasta"  # TXT uses FASTA format structure
             else:
                 format = "fasta"  # Default to FASTA
-        
-        SeqIO.write(
-            (SeqIO.SeqRecord(Seq(seq), id=header, description="") for header, seq in self),
-            outfile,
-            format,
-        )
+
+        records = (SeqIO.SeqRecord(Seq(seq), id=header, description="") for header, seq in self)
+
+        if compress:
+            with gzip.open(filename, "wt") as fh:
+                SeqIO.write(records, fh, format)
+        else:
+            SeqIO.write(records, outfile, format)
     
     def write_full_length_sequences(
         self,
         outfile: PathLike,
         format: Optional[str] = None,
+        compress: bool = False,
     ) -> None:
         """Write full-length unaligned sequences to file.
-        
+
         Args:
-            outfile: Path to output file
+            outfile: Path to output file (may end in .gz)
             format: Explicit format, auto-detect from extension if None
-        
+            compress: If True, gzip-compress the output.
+
         Raises:
             ValueError: If full-length sequences not available
         """
         if self.full_length_sequences is None:
             raise ValueError("Full-length sequences not available")
-        
+
         filename = Path(outfile)
-        
-        # Auto-detect format if not specified
+
+        if filename.suffix == ".gz":
+            compress = True
+        elif compress:
+            filename = Path(str(filename) + ".gz")
+
+        stem_path = Path(filename.stem) if compress else filename
         if format is None:
-            if filename.suffix == ".sto":
+            if stem_path.suffix == ".sto":
                 format = "stockholm"
-            elif filename.suffix in (".fas", ".fasta", ".a3m", ".a2m"):
+            elif stem_path.suffix in (".fas", ".fasta", ".a3m", ".a2m"):
                 format = "fasta"
-            elif filename.suffix == ".txt":
-                format = "fasta"  # TXT uses FASTA format structure
+            elif stem_path.suffix == ".txt":
+                format = "fasta"
             else:
-                format = "fasta"  # Default to FASTA
-        
-        SeqIO.write(
-            (SeqIO.SeqRecord(Seq(seq), id=header, description="") for header, seq in self.full_length_msa),
-            outfile,
-            format,
-        )
+                format = "fasta"
+
+        records = (SeqIO.SeqRecord(Seq(seq), id=header, description="") for header, seq in self.full_length_msa)
+
+        if compress:
+            with gzip.open(filename, "wt") as fh:
+                SeqIO.write(records, fh, format)
+        else:
+            SeqIO.write(records, outfile, format)
     
     def write_alignment_masks(
         self,
         filepath: PathLike,
         format: Optional[str] = None,
+        compress: bool = False,
     ) -> None:
         """Write alignment masks to file (same format as MSA).
-        
+
         Args:
-            filepath: Path to output file
+            filepath: Path to output file (may end in .gz)
             format: Explicit format, auto-detect from extension if None
-        
+            compress: If True, gzip-compress the output.
+
         Raises:
             ValueError: If alignment_masks not available
         """
         if not self.alignment_masks:
             raise ValueError("Alignment masks not available")
-        
-        filename = Path(filepath)
-        
-        # Auto-detect format if not specified
-        if format is None:
-            if filename.suffix == ".sto":
-                format = "stockholm"
-            elif filename.suffix in (".fas", ".fasta", ".a3m", ".a2m"):
-                format = "fasta"
-            elif filename.suffix == ".txt":
-                format = "fasta"  # TXT uses FASTA format structure
-            else:
-                format = "fasta"  # Default to FASTA
-        
+
         # Write masks in same format as MSA
         mask_sequences = [
             (header, mask)
@@ -768,4 +780,4 @@ class MSA:
             seqid_cutoff=self.seqid_cutoff,
             already_processed=True,  # Masks are already strings, no processing needed
         )
-        mask_msa.write(filepath, format=format)
+        mask_msa.write(filepath, format=format, compress=compress)

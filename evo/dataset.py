@@ -234,7 +234,7 @@ class A3MDataset(torch.utils.data.Dataset):
         if not data_file.is_dir():
             raise NotADirectoryError(data_file)
 
-        file_glob = data_file.glob("*.a3m")
+        file_glob = list(data_file.glob("*.a3m")) + list(data_file.glob("*.a3m.gz"))
         if split_files is None:
             file_list = list(file_glob)
         else:

@@ -1,5 +1,6 @@
 from typing import Tuple, List, Dict, Optional, Sequence
 from collections import defaultdict
+import gzip
 import string
 from pathlib import Path
 from Bio import SeqIO
@@ -12,6 +13,19 @@ from scipy.spatial.distance import squareform, pdist
 import pandas as pd
 
 
+def _detect_format(filename: Path) -> tuple[str, bool]:
+    """Detect sequence format and whether file is gzip-compressed."""
+    compressed = filename.suffix == ".gz"
+    stem_path = Path(filename.stem) if compressed else filename
+    if stem_path.suffix == ".sto":
+        form = "stockholm"
+    elif stem_path.suffix in (".fas", ".fasta", ".a3m"):
+        form = "fasta"
+    else:
+        raise ValueError(f"Unknown file format {stem_path.suffix}")
+    return form, compressed
+
+
 def read_sequences(
     filename: PathLike,
     remove_insertions: bool = False,
@@ -19,12 +33,7 @@ def read_sequences(
 ) -> Tuple[List[str], List[str]]:
 
     filename = Path(filename)
-    if filename.suffix == ".sto":
-        form = "stockholm"
-    elif filename.suffix in (".fas", ".fasta", ".a3m"):
-        form = "fasta"
-    else:
-        raise ValueError(f"Unknown file format {filename.suffix}")
+    form, compressed = _detect_format(filename)
 
     translate_dict: Dict[str, Optional[str]] = {}
     if remove_insertions:
@@ -46,9 +55,15 @@ def read_sequences(
 
     headers = []
     sequences = []
-    for header, seq in map(process_record, SeqIO.parse(str(filename), form)):
-        headers.append(header)
-        sequences.append(seq)
+    if compressed:
+        with gzip.open(filename, "rt") as fh:
+            for header, seq in map(process_record, SeqIO.parse(fh, form)):
+                headers.append(header)
+                sequences.append(seq)
+    else:
+        for header, seq in map(process_record, SeqIO.parse(str(filename), form)):
+            headers.append(header)
+            sequences.append(seq)
     return headers, sequences
 
 
@@ -59,12 +74,7 @@ def read_first_sequence(
 ) -> Tuple[str, str]:
 
     filename = Path(filename)
-    if filename.suffix == ".sto":
-        form = "stockholm"
-    elif filename.suffix in (".fas", ".fasta", ".a3m"):
-        form = "fasta"
-    else:
-        raise ValueError(f"Unknown file format {filename.suffix}")
+    form, compressed = _detect_format(filename)
 
     translate_dict: Dict[str, Optional[str]] = {}
     if remove_insertions:
@@ -84,12 +94,22 @@ def read_first_sequence(
         sequence = str(record.seq).translate(translation)
         return description, sequence
 
-    return process_record(next(SeqIO.parse(str(filename), form)))
+    if compressed:
+        with gzip.open(filename, "rt") as fh:
+            return process_record(next(SeqIO.parse(fh, form)))
+    else:
+        return process_record(next(SeqIO.parse(str(filename), form)))
 
 
 def count_sequences(seqfile: PathLike) -> int:
     "Utility for quickly counting sequences in a fasta/a3m file."
-    num_seqs = subprocess.check_output(f'grep "^>" -c {seqfile}', shell=True)
+    seqfile = Path(seqfile)
+    if seqfile.suffix == ".gz":
+        num_seqs = subprocess.check_output(
+            f'gunzip -c {seqfile} | grep "^>" -c', shell=True
+        )
+    else:
+        num_seqs = subprocess.check_output(f'grep "^>" -c {seqfile}', shell=True)
     return int(num_seqs)
 
 

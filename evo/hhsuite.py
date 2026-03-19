@@ -57,6 +57,24 @@ def compress_file(path: Path, *, remove_original: bool = True) -> Path:
     return gz_path
 
 
+def resolve_msa_path(path: Path) -> Path:
+    """Return *path* if it exists, otherwise try with/without .gz suffix.
+
+    Useful for code that constructs e.g. ``dir / f"{name}.a3m"`` but the file
+    may have been compressed to ``.a3m.gz``.
+    """
+    if path.exists():
+        return path
+    gz = Path(str(path) + ".gz")
+    if gz.exists():
+        return gz
+    if path.suffix == ".gz":
+        plain = Path(str(path)[:-3])
+        if plain.exists():
+            return plain
+    raise FileNotFoundError(f"File not found (checked plain and .gz): {path}")
+
+
 # =============================================================================
 # FASTA I/O helpers
 # =============================================================================

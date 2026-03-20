@@ -363,6 +363,7 @@ def _search_uniref100(
     *,
     evalue: float = 0.001,
     n_cpus: int = 32,
+    n: int = 2,
     keep_intermediates: bool = False,
     compress: bool = False,
     hhblits_binary: str = "hhblits",
@@ -370,7 +371,10 @@ def _search_uniref100(
     """UniRef100 strategy: single aggressive hhblits search.
 
     From the humanPPI paper (Supplementary M4.6). Uses aggressive parameters
-    (maxfilt=1e5, realign_max=1e4, n=4, all_seqs=True) for comprehensive results.
+    (maxfilt=1e5, realign_max=1e4, all_seqs=True) for comprehensive results.
+
+    Args:
+        n: Number of hhblits search iterations (default 2, hhblits default).
 
     Returns:
         Path to output .a3m (or .a3m.gz) file.
@@ -395,7 +399,7 @@ def _search_uniref100(
         all_seqs=True,
         realign_max=int(1e4),
         maxmem=64.0,
-        n=4,
+        n=n,
         diff=1000,
         evalue=evalue,
         binary=hhblits_binary,
@@ -579,6 +583,7 @@ def search_hhblits(
     *,
     strategy: str = "uniref100",
     n_cpus: int = 32,
+    n: int = 2,
     keep_intermediates: bool = False,
     compress: bool = True,
     evalue: float = 0.001,
@@ -597,6 +602,7 @@ def search_hhblits(
         output_dir: Directory for output files.
         strategy: Search strategy - "uniref100" (default) or "iterative".
         n_cpus: Number of CPUs for hhblits.
+        n: Number of hhblits search iterations (default 2).
         keep_intermediates: Keep intermediate files.
         compress: Gzip-compress the final .a3m output (default True).
         evalue: E-value cutoff (uniref100 strategy).
@@ -621,6 +627,7 @@ def search_hhblits(
             str(database),
             evalue=evalue,
             n_cpus=n_cpus,
+            n=n,
             keep_intermediates=keep_intermediates,
             compress=compress,
             hhblits_binary=hhblits_binary,

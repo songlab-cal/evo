@@ -435,7 +435,7 @@ def _search_uniref100(
     return output_a3m
 
 
-def _search_filtered(
+def _search_single_evalue(
     query_fasta: Path,
     output_dir: Path,
     database: str,
@@ -444,6 +444,7 @@ def _search_filtered(
     n_cpus: int = 1,
     n: int = 4,
     min_seqs: int = 2000,
+    maxmem: float = 3.0,
     keep_intermediates: bool = False,
     compress: bool = True,
     hhblits_binary: str = "hhblits",
@@ -478,7 +479,7 @@ def _search_filtered(
         cpu=n_cpus,
         all_seqs=True,
         realign_max=int(1e4),
-        maxmem=64.0,
+        maxmem=maxmem,
         n=n,
         diff=1000,
         evalue=evalue,
@@ -530,6 +531,7 @@ def _search_iterative(
     min_seqs_cov75: int = 2000,
     min_seqs_cov50: int = 5000,
     n_cpus: int = 20,
+    n: int = 4,
     keep_intermediates: bool = False,
     compress: bool = False,
     hhblits_binary: str = "hhblits",
@@ -569,7 +571,7 @@ def _search_iterative(
         all_seqs=True,
         realign_max=int(1e7),
         maxmem=64.0,
-        n=4,
+        n=n,
         binary=hhblits_binary,
     )
     hhfilter_cov75 = HHFilter(seqid=90, cov=75, binary=hhfilter_binary)
@@ -629,7 +631,7 @@ def _search_iterative(
                 all_seqs=True,
                 realign_max=int(1e7),
                 maxmem=64.0,
-                n=4,
+                n=n,
                 binary=hhblits_binary,
             )
             found = _run_evalue_sweep(
@@ -675,6 +677,7 @@ def search_hhblits(
     evalues: list[float] | None = None,
     min_seqs_cov75: int = 2000,
     min_seqs_cov50: int = 5000,
+    maxmem: float = 3.0,
     metagenomic_database: str | Path | None = None,
     hhblits_binary: str = "hhblits",
     hhfilter_binary: str = "hhfilter",
@@ -685,14 +688,14 @@ def search_hhblits(
         query_fasta: Path to input FASTA file (single sequence).
         database: Path to HH-suite database (e.g., UniRef30_2023_02).
         output_dir: Directory for output files.
-        strategy: Search strategy — "uniref100", "filtered" (recommended), or "iterative".
+        strategy: Search strategy — "uniref100", "single_evalue" (recommended), or "iterative".
         n_cpus: Number of CPUs for hhblits.
         n: Number of hhblits search iterations (default 2).
         keep_intermediates: Keep intermediate files.
         compress: Gzip-compress the final .a3m output (default True).
-        evalue: E-value cutoff (uniref100/filtered strategies).
+        evalue: E-value cutoff (uniref100/single_evalue strategies).
         evalues: List of E-values to try (iterative strategy).
-        min_seqs_cov75: Sequence threshold for cov75 filter (filtered/iterative).
+        min_seqs_cov75: Sequence threshold for cov75 filter (single_evalue/iterative).
         min_seqs_cov50: Early stop threshold at cov50 (iterative strategy).
         metagenomic_database: Optional metagenomic database (iterative strategy).
         hhblits_binary: Path to hhblits binary.
@@ -717,8 +720,8 @@ def search_hhblits(
             compress=compress,
             hhblits_binary=hhblits_binary,
         )
-    elif strategy == "filtered":
-        return _search_filtered(
+    elif strategy == "single_evalue":
+        return _search_single_evalue(
             query_fasta,
             output_dir,
             str(database),
@@ -726,6 +729,7 @@ def search_hhblits(
             n_cpus=n_cpus,
             n=n,
             min_seqs=min_seqs_cov75,
+            maxmem=maxmem,
             keep_intermediates=keep_intermediates,
             compress=compress,
             hhblits_binary=hhblits_binary,
@@ -743,6 +747,7 @@ def search_hhblits(
             min_seqs_cov75=min_seqs_cov75,
             min_seqs_cov50=min_seqs_cov50,
             n_cpus=n_cpus,
+            n=n,
             keep_intermediates=keep_intermediates,
             compress=compress,
             hhblits_binary=hhblits_binary,
@@ -750,7 +755,7 @@ def search_hhblits(
         )
     else:
         raise ValueError(
-            f"Unknown strategy: {strategy!r}. Use 'uniref100', 'filtered', or 'iterative'."
+            f"Unknown strategy: {strategy!r}. Use 'uniref100', 'single_evalue', or 'iterative'."
         )
 
 
@@ -774,6 +779,14 @@ def _search_single_protein(args: tuple) -> tuple[str, Path | None]:
         )
         return seq_id, output_path
     except subprocess.CalledProcessError as e:
+        if e.returncode == 3:
+            # No sequences found in DB — save query-only a3m.gz as skip marker
+            import gzip
+            output_path = output_dir / f"{seq_id}.a3m.gz"
+            with gzip.open(output_path, "wt") as f:
+                f.write(f">{seq_id}\n{sequence}\n")
+            logger.info(f"No sequences found for {seq_id} — saved empty MSA marker")
+            return seq_id, output_path
         logger.error(f"hhblits failed for {seq_id}: {e}")
         return seq_id, None
     finally:

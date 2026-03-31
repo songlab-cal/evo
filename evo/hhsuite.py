@@ -365,6 +365,7 @@ def _search_uniref100(
     n_cpus: int = 32,
     n: int = 2,
     keep_intermediates: bool = False,
+    keep_descriptions: bool = False,
     compress: bool = False,
     hhblits_binary: str = "hhblits",
 ) -> Path:
@@ -421,7 +422,8 @@ def _search_uniref100(
             intermediate_tab.rename(output_tab)
 
         # Clean up header descriptions
-        remove_descriptions(output_a3m)
+        if not keep_descriptions:
+            remove_descriptions(output_a3m)
 
         if compress:
             output_a3m = compress_file(output_a3m)
@@ -446,6 +448,7 @@ def _search_single_evalue(
     min_seqs: int = 2000,
     maxmem: float = 3.0,
     keep_intermediates: bool = False,
+    keep_descriptions: bool = False,
     compress: bool = True,
     hhblits_binary: str = "hhblits",
     hhfilter_binary: str = "hhfilter",
@@ -507,7 +510,8 @@ def _search_single_evalue(
             hhfilter_cov50.run(raw_a3m, cov50_a3m)
             cov50_a3m.rename(output_a3m)
 
-        remove_descriptions(output_a3m)
+        if not keep_descriptions:
+            remove_descriptions(output_a3m)
 
         if compress:
             output_a3m = compress_file(output_a3m)
@@ -533,6 +537,7 @@ def _search_iterative(
     n_cpus: int = 20,
     n: int = 4,
     keep_intermediates: bool = False,
+    keep_descriptions: bool = False,
     compress: bool = False,
     hhblits_binary: str = "hhblits",
     hhfilter_binary: str = "hhfilter",
@@ -645,7 +650,8 @@ def _search_iterative(
                 prev_a3m_ref.rename(output_a3m)
 
         if output_a3m.exists():
-            remove_descriptions(output_a3m)
+            if not keep_descriptions:
+                remove_descriptions(output_a3m)
             if compress:
                 output_a3m = compress_file(output_a3m)
 
@@ -672,6 +678,7 @@ def search_hhblits(
     n_cpus: int = 32,
     n: int = 2,
     keep_intermediates: bool = False,
+    keep_descriptions: bool = False,
     compress: bool = True,
     evalue: float = 0.001,
     evalues: list[float] | None = None,
@@ -692,6 +699,9 @@ def search_hhblits(
         n_cpus: Number of CPUs for hhblits.
         n: Number of hhblits search iterations (default 2).
         keep_intermediates: Keep intermediate files.
+        keep_descriptions: Keep full description text in FASTA headers (default False).
+            When True, headers like ">ID description TaxID=9606" are preserved.
+            When False, headers are stripped to ">ID" only.
         compress: Gzip-compress the final .a3m output (default True).
         evalue: E-value cutoff (uniref100/single_evalue strategies).
         evalues: List of E-values to try (iterative strategy).
@@ -717,6 +727,7 @@ def search_hhblits(
             n_cpus=n_cpus,
             n=n,
             keep_intermediates=keep_intermediates,
+            keep_descriptions=keep_descriptions,
             compress=compress,
             hhblits_binary=hhblits_binary,
         )
@@ -731,6 +742,7 @@ def search_hhblits(
             min_seqs=min_seqs_cov75,
             maxmem=maxmem,
             keep_intermediates=keep_intermediates,
+            keep_descriptions=keep_descriptions,
             compress=compress,
             hhblits_binary=hhblits_binary,
             hhfilter_binary=hhfilter_binary,
@@ -749,6 +761,7 @@ def search_hhblits(
             n_cpus=n_cpus,
             n=n,
             keep_intermediates=keep_intermediates,
+            keep_descriptions=keep_descriptions,
             compress=compress,
             hhblits_binary=hhblits_binary,
             hhfilter_binary=hhfilter_binary,
